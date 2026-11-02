@@ -1,13 +1,17 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { saveName, savedName } from "@/lib/client-name";
 
 export default function Home() {
   const router = useRouter();
+  const [name, setName] = useState("");
   const [hours, setHours] = useState(1);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => setName(savedName()), []);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -17,10 +21,11 @@ export default function Home() {
       const res = await fetch("/api/rooms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ durationHours: hours, password }),
+        body: JSON.stringify({ name, durationHours: hours, password }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Erro ao criar a sala");
+      saveName(name.trim());
       router.push(`/r/${data.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao criar a sala");
@@ -38,6 +43,19 @@ export default function Home() {
 
       <form className="card" onSubmit={create}>
         <h2>Nova sala</h2>
+
+        <label htmlFor="name">Seu nome</label>
+        <input
+          id="name"
+          type="text"
+          required
+          minLength={2}
+          maxLength={20}
+          autoComplete="nickname"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Como os outros vão te ver"
+        />
 
         <label htmlFor="dur">Duração</label>
         <select id="dur" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
@@ -57,7 +75,7 @@ export default function Home() {
           placeholder="Deixe vazio para entrar só com o link"
         />
         <p className="hint">
-          Sem senha, quem tiver o link entra. Com senha, ela é pedida antes de abrir a sala.
+          Sem senha, quem tiver o link entra (e escolhe um nome). Com senha, ela é pedida antes de abrir a sala.
         </p>
 
         <button className="primary block" disabled={busy}>

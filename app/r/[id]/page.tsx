@@ -4,16 +4,31 @@ import { useParams, useRouter } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
 import { uploadPresigned as blobUpload } from "@vercel/blob/client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { saveName, savedName } from "@/lib/client-name";
 
-type Message = { id: string; text: string; at: number };
-type FileItem = { id: string; name: string; size: number; at: number };
-type Phase = "loading" | "password" | "gone" | "ready";
+type Message = { id: string; text: string; at: number; by: string; mine: boolean };
+type FileItem = { id: string; name: string; size: number; at: number; by: string; mine: boolean; image: boolean };
+type Upload = { key: string; name: string; pct: number; preview?: string };
+type Phase = "loading" | "join" | "gone" | "ready";
 
 const MAX_BYTES = 50 * 1024 * 1024;
 const POLL_MS = 4000;
+const PREVIEW_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"];
+
+// Warnings as the room nears its end: a banner first, a popup for the last stretch.
+const WARNINGS = [
+  { ms: 3_600_000, label: "1 hora", popup: false },
+  { ms: 600_000, label: "10 minutos", popup: false },
+  { ms: 300_000, label: "5 minutos", popup: true },
+  { ms: 60_000, label: "1 minuto", popup: true },
+];
 
 // Blob pathnames are built from this, so keep it to safe characters.
 const safeName = (name: string) => name.replace(/[^\w.\-]+/g, "_").slice(-100) || "arquivo";
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+// Stable color per person, so a conversation is easy to follow.
+const hueOf = (name: string) => [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
 
 const fmtSize = (n: number) =>
   n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
@@ -31,6 +46,11 @@ function fmtRemaining(ms: number) {
   return `${pad(h)}:${pad(m)}:${pad(s % 60)}`;
 }
 
+async function apiError(res: Response, fallback: string) {
+  const data = await res.json().catch(() => ({}));
+  return (data.error as string | undefined) ?? fallback;
+}
+
 export default function RoomPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -38,17 +58,27 @@ export default function RoomPage() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [expiresAt, setExpiresAt] = useState<number>(0);
   const [now, setNow] = useState(() => Date.now());
+  const [me, setMe] = useState("");
+  const [isOwner, setIsOwner] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [text, setText] = useState("");
+  const [nameInput, setNameInput] = useState("");
   const [password, setPassword] = useState("");
+  const [hasPassword, setHasPassword] = useState(false);
+  const [joinError, setJoinError] = useState("");
+  const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
-  const [uploading, setUploading] = useState<string[]>([]);
+  const [uploads, setUploads] = useState<Upload[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [link, setLink] = useState("");
   const [copied, setCopied] = useState("");
+  const [notice, setNotice] = useState("");
+  const [popup, setPopup] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const version = useRef<number | null>(null);
+  const warned = useRef<Set<number> | null>(null);
 
   // Sends the last seen version; the server answers "unchanged" cheaply when nothing happened.
   const load = useCallback(async (force = false) => {
@@ -56,44 +86,53 @@ export default function RoomPage() {
     const res = await fetch(`/api/rooms/${id}${q}`, { cache: "no-store" }).catch(() => null);
     if (!res) return; // offline: try again on the next tick
     if (res.status === 404) return setPhase("gone");
-    if (res.status === 401) return setPhase("password");
+    if (res.status === 401) {
+      setPhase("join");
+      return;
+    }
     if (!res.ok) return;
     const data = await res.json();
     if (data.unchanged) return;
     version.current = data.version;
     setExpiresAt(new Date(data.expiresAt).getTime());
+    setMe(data.me);
+    setIsOwner(data.isOwner);
     setMessages(data.messages);
     setFiles(data.files);
     setPhase("ready");
   }, [id]);
 
   const join = useCallback(
-    async (pw?: string) => {
-      const res = await fetch(`/api/rooms/${id}/join`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw ?? "" }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 404) return setPhase("gone");
-      if (res.status === 401) {
-        setPhase("password");
-        if (pw) setError(data.error ?? "Senha incorreta");
-        return;
+    async (name: string, pw: string) => {
+      setJoining(true);
+      try {
+        const res = await fetch(`/api/rooms/${id}/join`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, password: pw }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 404) return setPhase("gone");
+        if (data.hasPassword !== undefined) setHasPassword(!!data.hasPassword);
+        if (data.needsJoin || !res.ok) {
+          setJoinError(data.error ?? "");
+          return setPhase("join");
+        }
+        saveName(data.name);
+        setJoinError("");
+        await load(true);
+      } finally {
+        setJoining(false);
       }
-      if (!res.ok) {
-        setError(data.error ?? "Não foi possível entrar");
-        return setPhase("password");
-      }
-      setError("");
-      await load();
     },
     [id, load],
   );
 
   useEffect(() => {
-    setLink(window.location.href);
-    join();
+    setLink(window.location.origin + window.location.pathname);
+    const saved = savedName();
+    setNameInput(saved);
+    void join(saved, ""); // with no saved name this is just a probe: it tells us if a password is needed
   }, [join]);
 
   // Near-live updates by polling, only while the tab is visible (saves the free-tier quotas).
@@ -118,6 +157,34 @@ export default function RoomPage() {
     if (phase === "ready" && expiresAt && now >= expiresAt) setPhase("gone");
   }, [now, expiresAt, phase]);
 
+  // Expiry warnings. On first sight, thresholds already behind us are marked as seen (we only say
+  // something if the room is close to its end); after that each one fires once as time runs out.
+  useEffect(() => {
+    if (phase !== "ready" || !expiresAt) return;
+    const remaining = expiresAt - now;
+    if (remaining <= 0) return;
+    if (warned.current === null) {
+      warned.current = new Set(WARNINGS.filter((w) => remaining <= w.ms).map((w) => w.ms));
+      if (remaining <= 600_000) setNotice(`Esta sala expira em ${Math.max(1, Math.ceil(remaining / 60_000))} min.`);
+      return;
+    }
+    for (const w of WARNINGS) {
+      if (remaining <= w.ms && !warned.current.has(w.ms)) {
+        warned.current.add(w.ms);
+        const msg = `Esta sala expira em ${w.label}. Baixe o que precisar antes que tudo seja apagado.`;
+        if (w.popup) setPopup(msg);
+        else setNotice(msg);
+      }
+    }
+  }, [now, expiresAt, phase]);
+
+  useEffect(() => {
+    const d = dialogRef.current;
+    if (!d) return;
+    if (popup && !d.open) d.showModal();
+    if (!popup && d.open) d.close();
+  }, [popup, phase]);
+
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages.length]);
@@ -132,9 +199,8 @@ export default function RoomPage() {
       body: JSON.stringify({ text: value }),
     });
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
       setText(value);
-      setError(data.error ?? "Não foi possível enviar");
+      setError(await apiError(res, "Não foi possível enviar"));
     } else {
       setError("");
       await load(true);
@@ -148,29 +214,30 @@ export default function RoomPage() {
           setError(`"${file.name}" passa de 50 MB`);
           continue;
         }
-        setUploading((u) => [...u, file.name]);
+        const key = uid();
+        const preview = PREVIEW_TYPES.includes(file.type) ? URL.createObjectURL(file) : undefined;
+        setUploads((u) => [...u, { key, name: file.name, pct: 0, preview }]);
         try {
-          // 1) straight to Vercel Blob with a token from our API, 2) register it in the room.
           // The unique prefix replaces "random suffix": presigned URLs are scoped to this exact pathname.
-          const blob = await blobUpload(`t2u/${id}/${crypto.randomUUID()}-${safeName(file.name)}`, file, {
+          const blob = await blobUpload(`t2u/${id}/${uid()}-${safeName(file.name)}`, file, {
             access: "private",
             handleUploadUrl: `/api/rooms/${id}/upload`,
+            onUploadProgress: (e) =>
+              setUploads((u) => u.map((x) => (x.key === key ? { ...x, pct: Math.round(e.percentage) } : x))),
           });
           const done = await fetch(`/api/rooms/${id}/files`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ pathname: blob.pathname, name: file.name }),
           });
-          if (!done.ok) {
-            const data = await done.json().catch(() => ({}));
-            throw new Error(data.error ?? "Falha ao concluir o envio");
-          }
+          if (!done.ok) throw new Error(await apiError(done, "Falha ao concluir o envio"));
           setError("");
           await load(true);
         } catch (e) {
           setError(e instanceof Error ? e.message : "Falha no envio");
         } finally {
-          setUploading((u) => u.filter((n, i) => i !== u.indexOf(file.name)));
+          setUploads((u) => u.filter((x) => x.key !== key));
+          if (preview) URL.revokeObjectURL(preview);
         }
       }
     },
@@ -201,9 +268,23 @@ export default function RoomPage() {
     }
   }
 
+  async function removeMessage(m: Message) {
+    const res = await fetch(`/api/rooms/${id}/messages/${m.id}`, { method: "DELETE" });
+    if (!res.ok) setError(await apiError(res, "Não foi possível apagar"));
+    await load(true);
+  }
+
+  async function removeFile(f: FileItem) {
+    if (!confirm(`Apagar "${f.name}" para todos?`)) return;
+    const res = await fetch(`/api/rooms/${id}/files/${f.id}`, { method: "DELETE" });
+    if (!res.ok) setError(await apiError(res, "Não foi possível apagar"));
+    await load(true);
+  }
+
   async function destroy() {
-    if (!confirm("Apagar esta sala e todos os arquivos agora?")) return;
-    await fetch(`/api/rooms/${id}`, { method: "DELETE" });
+    if (!confirm("Apagar esta sala e todos os arquivos agora, para todos?")) return;
+    const res = await fetch(`/api/rooms/${id}`, { method: "DELETE" });
+    if (!res.ok) return setError(await apiError(res, "Não foi possível apagar a sala"));
     router.push("/");
   }
 
@@ -223,40 +304,73 @@ export default function RoomPage() {
     );
   }
 
-  if (phase === "password") {
+  if (phase === "join") {
     return (
       <main className="wrap">
         <form
           className="card"
           onSubmit={(e) => {
             e.preventDefault();
-            void join(password);
+            void join(nameInput, password);
           }}
         >
-          <h1>Sala protegida</h1>
-          <p className="sub">Digite a senha para entrar.</p>
-          <label htmlFor="pw">Senha</label>
+          <h1>Entrar na sala</h1>
+          <p className="sub">Escolha como você aparece para os outros{hasPassword ? " e digite a senha" : ""}.</p>
+
+          <label htmlFor="name">Seu nome</label>
           <input
-            id="pw"
-            type="password"
+            id="name"
+            type="text"
+            required
+            minLength={2}
+            maxLength={20}
             autoFocus
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="nickname"
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
           />
-          <button className="primary block">Entrar</button>
-          {error && <p className="error" role="alert">{error}</p>}
+
+          {hasPassword && (
+            <>
+              <label htmlFor="pw">Senha</label>
+              <input
+                id="pw"
+                type="password"
+                required
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </>
+          )}
+
+          <button className="primary block" disabled={joining}>{joining ? "Entrando…" : "Entrar"}</button>
+          {joinError && <p className="error" role="alert">{joinError}</p>}
         </form>
       </main>
     );
   }
 
+  const remaining = expiresAt - now;
+
   return (
     <main className="wrap">
       <div className="topbar">
         <h1><Link href="/" style={{ color: "inherit", textDecoration: "none" }}>Transfer2U</Link></h1>
-        <span className="timer" aria-live="off">Expira em {fmtRemaining(expiresAt - now)}</span>
+        <div>
+          <span className="timer">Você: <strong>{me}</strong></span>
+          <span className={`timer${remaining < 300_000 ? " soon" : ""}`} style={{ marginLeft: 12 }}>
+            Expira em {fmtRemaining(remaining)}
+          </span>
+        </div>
       </div>
+
+      {notice && (
+        <div className="notice" role="status">
+          <span>{notice}</span>
+          <button aria-label="Fechar aviso" onClick={() => setNotice("")}>×</button>
+        </div>
+      )}
 
       <section className="card">
         <div className="share">
@@ -272,7 +386,7 @@ export default function RoomPage() {
             </p>
             <div className="row">
               <button onClick={() => copy(link, "link")}>{copied === "link" ? "Copiado!" : "Copiar link"}</button>
-              <button className="danger" onClick={destroy}>Apagar sala</button>
+              {isOwner && <button className="danger" onClick={destroy}>Apagar sala</button>}
             </div>
           </div>
         </div>
@@ -283,10 +397,20 @@ export default function RoomPage() {
         <div className="messages" ref={listRef}>
           {messages.length === 0 && <p className="empty">Nenhuma mensagem ainda.</p>}
           {messages.map((m) => (
-            <div className="msg" key={m.id}>
-              <button className="copy" onClick={() => copy(m.text, `m${m.id}`)}>
-                {copied === `m${m.id}` ? "Copiado" : "Copiar"}
-              </button>
+            <div className={`msg${m.mine ? " mine" : ""}`} key={m.id}>
+              <span className="actions">
+                <button onClick={() => copy(m.text, `m${m.id}`)}>
+                  {copied === `m${m.id}` ? "Copiado" : "Copiar"}
+                </button>
+                {(m.mine || isOwner) && (
+                  <button className="danger" aria-label="Apagar mensagem" onClick={() => removeMessage(m)}>
+                    Apagar
+                  </button>
+                )}
+              </span>
+              <span className="by" style={{ "--h": hueOf(m.by) } as React.CSSProperties}>
+                {m.by}{m.mine ? " (você)" : ""}
+              </span>
               {m.text}
               <small>{fmtTime(m.at)}</small>
             </div>
@@ -337,23 +461,53 @@ export default function RoomPage() {
         </label>
 
         <ul className="files">
-          {uploading.map((name, i) => (
-            <li key={`up${i}`}><span className="name">{name}</span><span className="size">enviando…</span></li>
+          {uploads.map((u) => (
+            <li key={u.key}>
+              {u.preview && <img className="thumb" src={u.preview} alt="" />}
+              <div className="name">
+                {u.name}
+                <progress max={100} value={u.pct} aria-label={`Enviando ${u.name}`} />
+                <div className="size">{u.pct}%</div>
+              </div>
+            </li>
           ))}
           {files.map((f) => (
             <li key={f.id}>
+              {f.image && (
+                <a href={`/api/rooms/${id}/files/${f.id}?inline=1`} target="_blank" rel="noopener">
+                  <img className="thumb" src={`/api/rooms/${id}/files/${f.id}?inline=1`} alt={`Prévia de ${f.name}`} loading="lazy" />
+                </a>
+              )}
               <div className="name">
                 {f.name}
-                <div className="size">{fmtSize(f.size)} · {fmtTime(f.at)}</div>
+                <div className="size">
+                  {fmtSize(f.size)} · {fmtTime(f.at)} ·{" "}
+                  <span className="by" style={{ "--h": hueOf(f.by) } as React.CSSProperties}>
+                    {f.by}{f.mine ? " (você)" : ""}
+                  </span>
+                </div>
               </div>
-              <a className="btn" href={`/api/rooms/${id}/files/${f.id}`}>Baixar</a>
+              <div className="row">
+                <a className="btn" href={`/api/rooms/${id}/files/${f.id}`}>Baixar</a>
+                {(f.mine || isOwner) && (
+                  <button className="danger" aria-label={`Apagar ${f.name}`} onClick={() => removeFile(f)}>Apagar</button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
-        {files.length === 0 && uploading.length === 0 && <p className="empty">Nenhum arquivo ainda.</p>}
+        {files.length === 0 && uploads.length === 0 && <p className="empty">Nenhum arquivo ainda.</p>}
       </section>
 
       {error && <p className="error" role="alert">{error}</p>}
+
+      <dialog ref={dialogRef} className="popup" onClose={() => setPopup("")} aria-labelledby="popup-title">
+        <h2 id="popup-title">A sala está acabando</h2>
+        <p>{popup}</p>
+        <form method="dialog">
+          <button className="primary">Entendi</button>
+        </form>
+      </dialog>
     </main>
   );
 }

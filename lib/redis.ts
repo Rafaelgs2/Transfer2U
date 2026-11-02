@@ -20,4 +20,5 @@ export const keys = (id: string) => ({
   version: `t2u:r:${id}:v`,
   messages: `t2u:r:${id}:m`,
   files: `t2u:r:${id}:f`,
+  users: `t2u:r:${id}:u`, // hash: lowercased display name -> client id
 });

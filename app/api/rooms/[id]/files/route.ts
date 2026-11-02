@@ -8,13 +8,14 @@ import {
   blobPrefix,
   json,
   newItemId,
+  resolveType,
 } from "@/lib/rooms";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * Step 2 of an upload: the browser already put the file in Blob, now we register it in the room
- * so it shows up for everyone. The size comes from Blob itself, never from the client.
+ * so it shows up for everyone. Size and type come from Blob itself, never from the client.
  */
 export async function POST(req: Request, { params }: Ctx) {
   const { id } = await params;
@@ -35,8 +36,11 @@ export async function POST(req: Request, { params }: Ctx) {
   }
 
   let size: number;
+  let type: string;
   try {
-    size = (await head(pathname)).size;
+    const meta = await head(pathname);
+    size = meta.size;
+    type = resolveType(name, meta.contentType);
   } catch {
     return json({ error: "Upload não encontrado" }, 400);
   }
@@ -45,6 +49,11 @@ export async function POST(req: Request, { params }: Ctx) {
     return json({ error: "Arquivo maior que 50 MB" }, 413);
   }
 
-  await append(room, "files", { id: newItemId(), name, size, pathname, at: Date.now() }, MAX_FILES_PER_ROOM);
+  await append(
+    room,
+    "files",
+    { id: newItemId(), name, size, pathname, at: Date.now(), by: room.session.name, cid: room.session.cid, type },
+    MAX_FILES_PER_ROOM,
+  );
   return json({ ok: true }, 201);
 }

@@ -9,6 +9,10 @@ Stack: Next.js na Vercel + **Upstash Redis** (salas e mensagens) + **Vercel Blob
 - Entrar numa sala gera um cookie assinado (JWT) válido até a sala expirar. Senha é guardada como hash bcrypt.
 - Arquivos: o navegador envia direto ao Vercel Blob (privado) com um token curto gerado pela API; isso passa do limite de 4,5 MB das funções. O download passa pela API, que confere o cookie e faz stream do arquivo.
 - Atualização quase em tempo real por polling a cada 4 s (só com a aba visível). O cliente manda a última versão vista e o servidor responde "sem mudanças" com um único comando Redis.
+- Cada pessoa escolhe um nome ao entrar (único na sala, sem diferenciar maiúsculas). O nome vai dentro do cookie assinado, então o servidor sabe quem enviou cada coisa e ninguém se passa por outro.
+- Cada um apaga as próprias mensagens e arquivos; só quem criou a sala apaga os dos outros e a sala inteira.
+- Upload com barra de progresso; imagens de até 4 MB ganham miniatura (só PNG, JPEG, GIF, WebP e AVIF são exibidos; SVG nunca).
+- Avisos de fim da sala: faixa em 1 h e 10 min restantes, popup em 5 min e 1 min.
 - Os arquivos de salas expiradas são apagados pelo cron diário (`vercel.json`); as salas em si já ficam inacessíveis na hora.
 
 ## Configurar

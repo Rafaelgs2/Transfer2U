@@ -1,28 +1,65 @@
 import { randomBytes } from "node:crypto";
 import { del, list } from "@vercel/blob";
 import { NextResponse } from "next/server";
-import { hasAccess } from "./auth";
+import { getSession, type Session } from "./auth";
 import { keys, redis } from "./redis";
 
 export const DURATIONS_HOURS = [1, 24, 168] as const;
 export const MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const MAX_FILES_PER_ROOM = 50;
 export const MAX_MESSAGES_PER_ROOM = 500;
+export const MAX_USERS_PER_ROOM = 30;
 
-export type Room = { id: string; password_hash: string | null; expires_at: string };
-type RoomRecord = { pw: string | null; exp: number };
+export type Room = { id: string; password_hash: string | null; expires_at: string; owner: string };
+export type AuthedRoom = Room & { session: Session };
+type RoomRecord = { pw: string | null; exp: number; owner: string };
 
-export type Message = { id: string; text: string; at: number };
-export type StoredFile = { id: string; name: string; size: number; pathname: string; at: number };
+export type Message = { id: string; text: string; at: number; by: string; cid: string };
+export type StoredFile = {
+  id: string;
+  name: string;
+  size: number;
+  pathname: string;
+  at: number;
+  by: string;
+  cid: string;
+  type: string;
+};
 
 export const newRoomId = () => randomBytes(9).toString("base64url"); // 12 url-safe chars
 export const newItemId = () => randomBytes(6).toString("hex");
+export const newClientId = () => randomBytes(8).toString("hex");
 export const blobPrefix = (roomId: string) => `t2u/${roomId}/`;
 
 export const json = (body: unknown, status = 200) => NextResponse.json(body, { status });
 
 export function clientIp(req: Request): string {
   return req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
+}
+
+export const NAME_HINT = "Use de 2 a 20 letras, números, espaço, ponto, _ ou -";
+
+/** Normalizes a display name; returns null when it is not acceptable. */
+export function validateName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const name = raw.trim().replace(/\s+/g, " ");
+  if (name.length < 2 || name.length > 20) return null;
+  return /^[\p{L}\p{N} ._-]+$/u.test(name) ? name : null;
+}
+
+/** Only these are ever served inline; SVG is excluded on purpose (it can carry scripts). */
+const INLINE_IMAGES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]);
+export const isInlineImage = (type: string) => INLINE_IMAGES.has(type);
+/** Thumbnails load the whole file, so only small images get one (saves free-tier bandwidth). */
+export const PREVIEW_MAX_BYTES = 4 * 1024 * 1024;
+
+const EXT_TYPES: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif",
+};
+/** Blob may report octet-stream for files sent without a type; fall back to the extension. */
+export function resolveType(name: string, reported: string): string {
+  if (reported && reported !== "application/octet-stream") return reported.split(";")[0].trim().toLowerCase();
+  return EXT_TYPES[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
 }
 
 /** Returns false when the caller has exceeded `max` hits in the window. */
@@ -37,15 +74,30 @@ export async function allow(key: string, max: number, windowSeconds: number): Pr
   }
 }
 
-/** Creates the room and its version counter. Every key expires with the room. */
-export async function createRoom(id: string, passwordHash: string | null, expiresAt: Date) {
+/** Reserves `name` (case-insensitive) for `cid`. Re-claiming with the same cid is fine. */
+export async function claimName(roomId: string, expiresAt: Date, name: string, cid: string): Promise<boolean> {
+  const k = keys(roomId).users;
+  const field = name.toLowerCase();
+  const holder = await redis().hget<string>(k, field);
+  if (holder) return holder === cid;
+  if ((await redis().hlen(k)) >= MAX_USERS_PER_ROOM) return false;
+  const created = await redis().hsetnx(k, field, cid);
+  if (!created) return (await redis().hget<string>(k, field)) === cid;
+  await redis().expireat(k, Math.floor(expiresAt.getTime() / 1000));
+  return true;
+}
+
+/** Creates the room, its version counter and the creator's name. Every key expires with the room. */
+export async function createRoom(id: string, passwordHash: string | null, expiresAt: Date, creator: Session) {
   const k = keys(id);
   const exp = Math.floor(expiresAt.getTime() / 1000);
   const p = redis().pipeline();
-  p.set(k.room, { pw: passwordHash, exp: expiresAt.getTime() } satisfies RoomRecord);
+  p.set(k.room, { pw: passwordHash, exp: expiresAt.getTime(), owner: creator.cid } satisfies RoomRecord);
   p.expireat(k.room, exp);
   p.set(k.version, 1);
   p.expireat(k.version, exp);
+  p.hset(k.users, { [creator.name.toLowerCase()]: creator.cid });
+  p.expireat(k.users, exp);
   await p.exec();
 }
 
@@ -54,15 +106,16 @@ export async function getRoom(id: string): Promise<Room | null> {
   if (!/^[A-Za-z0-9_-]{12}$/.test(id)) return null;
   const rec = await redis().get<RoomRecord>(keys(id).room);
   if (!rec || rec.exp <= Date.now()) return null;
-  return { id, password_hash: rec.pw, expires_at: new Date(rec.exp).toISOString() };
+  return { id, password_hash: rec.pw, expires_at: new Date(rec.exp).toISOString(), owner: rec.owner };
 }
 
-/** Resolves the room and verifies the caller holds a valid token. Returns a response on failure. */
-export async function authorize(id: string): Promise<Room | NextResponse> {
+/** Resolves the room and the caller's session. Returns a response on failure. */
+export async function authorize(id: string): Promise<AuthedRoom | NextResponse> {
   const room = await getRoom(id);
   if (!room) return json({ error: "Sala não encontrada ou expirada" }, 404);
-  if (!(await hasAccess(id))) return json({ error: "Sem acesso", needsJoin: true }, 401);
-  return room;
+  const session = await getSession(id);
+  if (!session) return json({ error: "Sem acesso", needsJoin: true }, 401);
+  return { ...room, session };
 }
 
 /** Appends to a room list (capped) and bumps the version so polling clients refetch. */
@@ -77,11 +130,20 @@ export async function append(room: Room, list: "messages" | "files", item: Messa
   await p.exec();
 }
 
+/** Removes one entry from a room list and bumps the version. */
+export async function removeItem(roomId: string, list: "messages" | "files", item: Message | StoredFile) {
+  const k = keys(roomId);
+  const p = redis().pipeline();
+  p.lrem(k[list], 1, item);
+  p.incr(k.version);
+  await p.exec();
+}
+
 /** Deletes a room's stored files (including orphaned uploads), then its Redis keys. */
 export async function destroyRoom(id: string) {
   await deleteBlobs(blobPrefix(id));
   const k = keys(id);
-  await redis().del(k.room, k.version, k.messages, k.files);
+  await redis().del(k.room, k.version, k.messages, k.files, k.users);
 }
 
 export async function deleteBlobs(prefix: string) {

@@ -24,7 +24,12 @@ export async function POST(req: Request, { params }: Ctx) {
   if (!text || text.length > 4000) return json({ error: "Mensagem inválida" }, 400);
 
   try {
-    await append(room, "messages", { id: newItemId(), text, at: Date.now() }, MAX_MESSAGES_PER_ROOM);
+    await append(
+      room,
+      "messages",
+      { id: newItemId(), text, at: Date.now(), by: room.session.name, cid: room.session.cid },
+      MAX_MESSAGES_PER_ROOM,
+    );
   } catch {
     return json({ error: "Não foi possível enviar" }, 500);
   }

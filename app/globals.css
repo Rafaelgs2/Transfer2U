@@ -111,3 +111,36 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .files .size { color: var(--muted); font-size: .8rem; }
 
 section.card + section.card { margin-top: 16px; }
+
+/* --- usernames, actions, previews, progress, warnings --- */
+.timer strong { color: var(--text); }
+.timer.soon { color: var(--danger); font-weight: 700; }
+
+.msg { position: relative; }
+.msg.mine { background: var(--mine); }
+.msg:not(.mine) { background: var(--bg); border: 1px solid var(--border); }
+.msg .actions { float: right; margin-left: 8px; display: inline-flex; gap: 4px; }
+.msg .actions button { padding: 2px 8px; font-size: .75rem; }
+.by { --name-l: 38%; display: block; font-size: .78rem; font-weight: 700; color: hsl(var(--h, 250) 60% var(--name-l)); }
+.size .by { display: inline; font-size: inherit; }
+@media (prefers-color-scheme: dark) { .by { --name-l: 72%; } }
+
+.thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; flex: none; }
+.files li { flex-wrap: wrap; }
+.files .name { flex: 1; }
+progress { width: 100%; height: 8px; margin-top: 6px; accent-color: var(--accent); display: block; }
+
+.notice {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--surface); border: 1px solid var(--danger); color: var(--text);
+  border-radius: 12px; padding: 10px 14px; margin-bottom: 16px;
+}
+.notice button { border: 0; background: transparent; padding: 0 6px; font-size: 1.3rem; line-height: 1; }
+
+dialog.popup {
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 16px;
+  padding: 20px; max-width: min(92vw, 420px);
+}
+dialog.popup::backdrop { background: rgba(0, 0, 0, .55); }
+dialog.popup form { margin-top: 12px; text-align: right; }
