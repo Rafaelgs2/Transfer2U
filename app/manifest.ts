@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Envie arquivos e mensagens entre celular e computador.",
     start_url: "/",
     display: "standalone",
-    background_color: "#0f1020",
-    theme_color: "#4f46e5",
+    background_color: "#1f4bff",
+    theme_color: "#1f4bff",
     icons: [{ src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" }],
   };
 }

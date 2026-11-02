@@ -12,7 +12,9 @@ import {
 } from "@/lib/rooms";
 
 export async function POST(req: Request) {
-  if (!(await allow(`create:${clientIp(req)}`, 20, 3600))) {
+  // Locally every request shares one address, so normal testing would hit the real limit.
+  const maxPerHour = process.env.NODE_ENV === "production" ? 20 : 1000;
+  if (!(await allow(`create:${clientIp(req)}`, maxPerHour, 3600))) {
     return json({ error: "Muitas salas criadas. Tente mais tarde." }, 429);
   }
 

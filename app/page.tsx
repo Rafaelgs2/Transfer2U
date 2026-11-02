@@ -1,7 +1,14 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { Tape } from "@/components/Tape";
 import { saveName, savedName } from "@/lib/client-name";
+
+const DURATIONS = [
+  { hours: 1, label: "1 h" },
+  { hours: 24, label: "24 h" },
+  { hours: 168, label: "7 d" },
+];
 
 export default function Home() {
   const router = useRouter();
@@ -10,7 +17,6 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
   const [code, setCode] = useState("");
   const [codeBusy, setCodeBusy] = useState(false);
   const [codeError, setCodeError] = useState("");
@@ -57,76 +63,106 @@ export default function Home() {
   }
 
   return (
-    <main className="wrap">
-      <h1>Transfer2U</h1>
-      <p className="sub">
-        Mande textos e arquivos do celular para o computador (e para amigos). Sem cadastro: crie uma
-        sala, compartilhe o link e ela some sozinha.
-      </p>
+    <main className="home">
+      <div className="statement">
+        <h1 className="brand">Transfer<span>2U</span></h1>
+        <div className="statement-foot">
+          <h2 className="tagline"><span>Imprime aqui.</span> <span>Recebe lá.</span></h2>
+          <p>Textos e arquivos do celular para o computador, ou para quem você quiser. Sem cadastro, e tudo some quando a sala acaba.</p>
+          <ol className="steps">
+            <li>Crie uma sala</li>
+            <li>Abra em outro aparelho ou chame alguém com o código ou o QR</li>
+            <li>Mande textos e arquivos</li>
+          </ol>
+        </div>
+      </div>
 
-      <form className="card" onSubmit={enter}>
-        <h2>Entrar com código</h2>
-        <div className="compose" style={{ marginTop: 0 }}>
+      <Tape>
+        <form onSubmit={enter}>
+          <label htmlFor="code">Já tem um código?</label>
+          <div className="code-field">
+            <input
+              id="code"
+              type="text"
+              required
+              maxLength={7}
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              placeholder="K7M2QX"
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+            />
+            <button className="btn btn-solid" disabled={codeBusy}>{codeBusy ? "Entrando…" : "Entrar"}</button>
+          </div>
+          {codeError && <p className="error" role="alert">{codeError}</p>}
+        </form>
+
+        <div className="cut">ou</div>
+
+        <form onSubmit={create}>
+          <h2 className="section-title">Nova sala</h2>
+
+          <label htmlFor="name">Seu nome</label>
           <input
-            className="code-input"
+            id="name"
             type="text"
             required
-            maxLength={7}
-            autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck={false}
-            aria-label="Código da sala"
-            placeholder="K7M2QX"
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            minLength={2}
+            maxLength={20}
+            autoComplete="nickname"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
           />
-          <button className="primary" disabled={codeBusy}>{codeBusy ? "Entrando…" : "Entrar"}</button>
+
+          <fieldset>
+            <legend>Duração</legend>
+            <div className="choices">
+              {DURATIONS.map((d) => (
+                <label key={d.hours}>
+                  <input
+                    type="radio"
+                    name="duration"
+                    checked={hours === d.hours}
+                    onChange={() => setHours(d.hours)}
+                  />
+                  <span>{d.label}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <label htmlFor="pw">Senha (opcional)</label>
+          <input
+            id="pw"
+            type="password"
+            autoComplete="new-password"
+            maxLength={100}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <p className="hint">Sem senha, entra quem tiver o link ou o código.</p>
+
+          <button className="btn btn-solid btn-wide" disabled={busy}>{busy ? "Criando…" : "Criar sala"}</button>
+          {error && <p className="error" role="alert">{error}</p>}
+        </form>
+
+        <div className="receipt-foot">
+          {[
+            ["Arquivo", "até 50 MB"],
+            ["Duração", "até 7 dias"],
+            ["Cadastro", "nenhum"],
+            ["Custo", "R$ 0,00"],
+          ].map(([label, value]) => (
+            <div className="total" key={label}>
+              <span>{label}</span>
+              <span className="dots" aria-hidden="true" />
+              <span>{value}</span>
+            </div>
+          ))}
+          <div className="barcode" aria-hidden="true" />
         </div>
-        {codeError && <p className="error" role="alert">{codeError}</p>}
-      </form>
-
-      <form className="card" onSubmit={create}>
-        <h2>Nova sala</h2>
-
-        <label htmlFor="name">Seu nome</label>
-        <input
-          id="name"
-          type="text"
-          required
-          minLength={2}
-          maxLength={20}
-          autoComplete="nickname"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Como os outros vão te ver"
-        />
-
-        <label htmlFor="dur">Duração</label>
-        <select id="dur" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
-          <option value={1}>1 hora</option>
-          <option value={24}>24 horas</option>
-          <option value={168}>7 dias</option>
-        </select>
-
-        <label htmlFor="pw">Senha (opcional)</label>
-        <input
-          id="pw"
-          type="password"
-          autoComplete="new-password"
-          maxLength={100}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Deixe vazio para entrar só com o link"
-        />
-        <p className="hint">
-          Sem senha, quem tiver o link entra (e escolhe um nome). Com senha, ela é pedida antes de abrir a sala.
-        </p>
-
-        <button className="primary block" disabled={busy}>
-          {busy ? "Criando…" : "Criar sala"}
-        </button>
-        {error && <p className="error" role="alert">{error}</p>}
-      </form>
+      </Tape>
     </main>
   );
 }
