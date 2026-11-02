@@ -11,7 +11,30 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  const [code, setCode] = useState("");
+  const [codeBusy, setCodeBusy] = useState(false);
+  const [codeError, setCodeError] = useState("");
+
   useEffect(() => setName(savedName()), []);
+
+  async function enter(e: React.FormEvent) {
+    e.preventDefault();
+    setCodeBusy(true);
+    setCodeError("");
+    try {
+      const res = await fetch("/api/code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Não foi possível entrar");
+      router.push(`/r/${data.id}`);
+    } catch (err) {
+      setCodeError(err instanceof Error ? err.message : "Não foi possível entrar");
+      setCodeBusy(false);
+    }
+  }
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -40,6 +63,27 @@ export default function Home() {
         Mande textos e arquivos do celular para o computador (e para amigos). Sem cadastro: crie uma
         sala, compartilhe o link e ela some sozinha.
       </p>
+
+      <form className="card" onSubmit={enter}>
+        <h2>Entrar com código</h2>
+        <div className="compose" style={{ marginTop: 0 }}>
+          <input
+            className="code-input"
+            type="text"
+            required
+            maxLength={7}
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            aria-label="Código da sala"
+            placeholder="K7M2QX"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+          />
+          <button className="primary" disabled={codeBusy}>{codeBusy ? "Entrando…" : "Entrar"}</button>
+        </div>
+        {codeError && <p className="error" role="alert">{codeError}</p>}
+      </form>
 
       <form className="card" onSubmit={create}>
         <h2>Nova sala</h2>

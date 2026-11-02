@@ -40,7 +40,7 @@ export async function GET(req: Request, { params }: Ctx) {
   p.lrange(k.messages, 0, -1);
   p.lrange(k.files, 0, -1);
   const [room, messages, files] = (await p.exec()) as [
-    { pw: string | null; exp: number; owner: string } | null,
+    { pw: string | null; exp: number; owner: string; code?: string } | null,
     Message[],
     StoredFile[],
   ];
@@ -50,6 +50,7 @@ export async function GET(req: Request, { params }: Ctx) {
     version,
     expiresAt: new Date(room.exp).toISOString(),
     hasPassword: !!room.pw,
+    code: room.code ?? null,
     me: session.name,
     isOwner: room.owner === session.cid,
     messages: messages.map((m) => ({ id: m.id, text: m.text, at: m.at, by: m.by, mine: m.cid === session.cid })),
@@ -71,6 +72,6 @@ export async function DELETE(_req: Request, { params }: Ctx) {
   const room = await authorize(id);
   if (room instanceof Response) return room;
   if (room.owner !== room.session.cid) return json({ error: "Só quem criou a sala pode apagá-la" }, 403);
-  await destroyRoom(id);
+  await destroyRoom(id, room.code);
   return json({ ok: true });
 }

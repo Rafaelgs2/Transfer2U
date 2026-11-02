@@ -144,3 +144,17 @@ dialog.popup {
 }
 dialog.popup::backdrop { background: rgba(0, 0, 0, .55); }
 dialog.popup form { margin-top: 12px; text-align: right; }
+
+/* --- short room code --- */
+.code {
+  font: 700 1.8rem/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .18em;
+  margin: 0 0 6px;
+  user-select: all;
+}
+.code-input {
+  font: 700 1.2rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+}
+.card + .card, form.card + form.card { margin-top: 16px; }

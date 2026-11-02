@@ -60,6 +60,7 @@ export default function RoomPage() {
   const [now, setNow] = useState(() => Date.now());
   const [me, setMe] = useState("");
   const [isOwner, setIsOwner] = useState(false);
+  const [roomCode, setRoomCode] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [text, setText] = useState("");
@@ -97,6 +98,7 @@ export default function RoomPage() {
     setExpiresAt(new Date(data.expiresAt).getTime());
     setMe(data.me);
     setIsOwner(data.isOwner);
+    setRoomCode(data.code);
     setMessages(data.messages);
     setFiles(data.files);
     setPhase("ready");
@@ -381,11 +383,17 @@ export default function RoomPage() {
           )}
           <div style={{ flex: 1, minWidth: 200 }}>
             <h2>Compartilhar</h2>
+            {roomCode && <div className="code">{roomCode}</div>}
             <p className="hint" style={{ margin: "0 0 8px" }}>
-              Escaneie o QR no celular ou envie o link. {link && <code>{new URL(link).host}/r/…</code>}
+              {roomCode && link
+                ? `Digite este código em ${new URL(link).host}, escaneie o QR ou envie o link.`
+                : "Escaneie o QR ou envie o link."}
             </p>
             <div className="row">
               <button onClick={() => copy(link, "link")}>{copied === "link" ? "Copiado!" : "Copiar link"}</button>
+              {roomCode && (
+                <button onClick={() => copy(roomCode, "code")}>{copied === "code" ? "Copiado!" : "Copiar código"}</button>
+              )}
               {isOwner && <button className="danger" onClick={destroy}>Apagar sala</button>}
             </div>
           </div>

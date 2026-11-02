@@ -1,8 +1,8 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { del, list } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import { getSession, type Session } from "./auth";
-import { keys, redis } from "./redis";
+import { codeKey, keys, redis } from "./redis";
 
 export const DURATIONS_HOURS = [1, 24, 168] as const;
 export const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -10,9 +10,9 @@ export const MAX_FILES_PER_ROOM = 50;
 export const MAX_MESSAGES_PER_ROOM = 500;
 export const MAX_USERS_PER_ROOM = 30;
 
-export type Room = { id: string; password_hash: string | null; expires_at: string; owner: string };
+export type Room = { id: string; password_hash: string | null; expires_at: string; owner: string; code: string | null };
 export type AuthedRoom = Room & { session: Session };
-type RoomRecord = { pw: string | null; exp: number; owner: string };
+type RoomRecord = { pw: string | null; exp: number; owner: string; code?: string };
 
 export type Message = { id: string; text: string; at: number; by: string; cid: string };
 export type StoredFile = {
@@ -37,7 +37,28 @@ export function clientIp(req: Request): string {
   return req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
 }
 
-export const NAME_HINT = "Use de 2 a 20 letras, números, espaço, ponto, _ ou -";
+// No 0/O or 1/I/L, so a code survives being read aloud or typed from another screen.
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const CODE_LENGTH = 6;
+
+/** Uppercases and drops separators; returns null when it can't be a valid code. */
+export function normalizeCode(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const code = raw.toUpperCase().replace(/[\s-]/g, "");
+  if (code.length !== CODE_LENGTH || [...code].some((c) => !CODE_ALPHABET.includes(c))) return null;
+  return code;
+}
+
+/** Picks a free code and points it at the room. NX makes a collision retry instead of hijacking a room. */
+async function reserveCode(roomId: string, exp: number): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = Array.from({ length: CODE_LENGTH }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join("");
+    if (await redis().set(codeKey(code), roomId, { nx: true, exat: exp })) return code;
+  }
+  throw new Error("Could not reserve a room code");
+}
+
+export const NAME_HINT ="Use de 2 a 20 letras, números, espaço, ponto, _ ou -";
 
 /** Normalizes a display name; returns null when it is not acceptable. */
 export function validateName(raw: unknown): string | null {
@@ -91,8 +112,9 @@ export async function claimName(roomId: string, expiresAt: Date, name: string, c
 export async function createRoom(id: string, passwordHash: string | null, expiresAt: Date, creator: Session) {
   const k = keys(id);
   const exp = Math.floor(expiresAt.getTime() / 1000);
+  const code = await reserveCode(id, exp);
   const p = redis().pipeline();
-  p.set(k.room, { pw: passwordHash, exp: expiresAt.getTime(), owner: creator.cid } satisfies RoomRecord);
+  p.set(k.room, { pw: passwordHash, exp: expiresAt.getTime(), owner: creator.cid, code } satisfies RoomRecord);
   p.expireat(k.room, exp);
   p.set(k.version, 1);
   p.expireat(k.version, exp);
@@ -106,7 +128,13 @@ export async function getRoom(id: string): Promise<Room | null> {
   if (!/^[A-Za-z0-9_-]{12}$/.test(id)) return null;
   const rec = await redis().get<RoomRecord>(keys(id).room);
   if (!rec || rec.exp <= Date.now()) return null;
-  return { id, password_hash: rec.pw, expires_at: new Date(rec.exp).toISOString(), owner: rec.owner };
+  return {
+    id,
+    password_hash: rec.pw,
+    expires_at: new Date(rec.exp).toISOString(),
+    owner: rec.owner,
+    code: rec.code ?? null,
+  };
 }
 
 /** Resolves the room and the caller's session. Returns a response on failure. */
@@ -140,10 +168,10 @@ export async function removeItem(roomId: string, list: "messages" | "files", ite
 }
 
 /** Deletes a room's stored files (including orphaned uploads), then its Redis keys. */
-export async function destroyRoom(id: string) {
+export async function destroyRoom(id: string, code: string | null) {
   await deleteBlobs(blobPrefix(id));
   const k = keys(id);
-  await redis().del(k.room, k.version, k.messages, k.files, k.users);
+  await redis().del(k.room, k.version, k.messages, k.files, k.users, ...(code ? [codeKey(code)] : []));
 }
 
 export async function deleteBlobs(prefix: string) {

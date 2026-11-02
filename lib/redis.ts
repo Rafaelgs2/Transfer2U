@@ -14,6 +14,9 @@ export function redis(): Redis {
   return client;
 }
 
+/** Short code -> room id. Expires with the room. */
+export const codeKey = (code: string) => `t2u:c:${code}`;
+
 /** Every key a room owns; they all expire together with the room. */
 export const keys = (id: string) => ({
   room: `t2u:r:${id}`,
