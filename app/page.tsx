@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { SoundToggle } from "@/components/SoundToggle";
 import { Tape } from "@/components/Tape";
 import { saveName, savedName } from "@/lib/client-name";
 
@@ -160,6 +161,7 @@ export default function Home() {
               <span>{value}</span>
             </div>
           ))}
+          <div className="foot-sound"><SoundToggle /></div>
           <div className="barcode" aria-hidden="true" />
         </div>
       </Tape>

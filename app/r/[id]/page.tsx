@@ -4,8 +4,10 @@ import { QRCodeSVG } from "qrcode.react";
 import { uploadPresigned as blobUpload } from "@vercel/blob/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { SoundToggle } from "@/components/SoundToggle";
 import { Tape, Wordmark } from "@/components/Tape";
 import { saveName, savedName } from "@/lib/client-name";
+import { sound } from "@/lib/sound";
 
 type Message = { id: string; text: string; at: number; by: string; mine: boolean };
 type FileItem = { id: string; name: string; size: number; at: number; by: string; mine: boolean; image: boolean };
@@ -14,6 +16,11 @@ type Phase = "loading" | "join" | "gone" | "ready";
 
 const MAX_BYTES = 50 * 1024 * 1024;
 const POLL_MS = 4000;
+const TEAR_MS = 500; // how long an item takes to rip off the tape; keep in step with .tearing in the CSS
+const DROP_MS = 680; // same for the whole room falling (.destroying)
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const PREVIEW_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"];
 
 // Warnings as the room nears its end: a slip on the tape first, a coupon for the last stretch.
@@ -62,6 +69,8 @@ export default function RoomPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const [tearing, setTearing] = useState<Set<string>>(new Set());
+  const [destroying, setDestroying] = useState(false);
   const [text, setText] = useState("");
   const [nameInput, setNameInput] = useState("");
   const [password, setPassword] = useState("");
@@ -79,8 +88,11 @@ export default function RoomPage() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const version = useRef<number | null>(null);
   const known = useRef<Set<string> | null>(null);
+  const torn = useRef<Set<string>>(new Set());
+  const prevPhase = useRef<Phase>("loading");
   const warned = useRef<Set<number> | null>(null);
   const followEnd = useRef(true);
+  const opened = useRef(false);
 
   // Sends the last seen version; the server answers "unchanged" cheaply when nothing happened.
   const load = useCallback(async (force = false) => {
@@ -100,8 +112,20 @@ export default function RoomPage() {
     // Only what arrived after the room opened gets the printing animation.
     const ids: string[] = [...data.messages, ...data.files].map((x: { id: string }) => x.id);
     const seen = known.current;
-    setFresh(new Set(seen ? ids.filter((x) => !seen.has(x)) : []));
+    const added = seen ? ids.filter((x) => !seen.has(x)) : [];
+
+    // Someone else deleted something: rip it off here too before it leaves the list.
+    const gone = seen ? [...seen].filter((x) => !ids.includes(x) && !torn.current.has(x)) : [];
     known.current = new Set(ids);
+    if (gone.length && !reducedMotion()) {
+      gone.forEach((x) => torn.current.add(x));
+      setTearing(new Set(torn.current));
+      sound.tear();
+      await sleep(TEAR_MS);
+    }
+
+    setFresh(new Set(added));
+    if (added.length) sound.print();
 
     setExpiresAt(new Date(data.expiresAt).getTime());
     setMe(data.me);
@@ -110,6 +134,8 @@ export default function RoomPage() {
     setMessages(data.messages);
     setFiles(data.files);
     setPhase("ready");
+    torn.current = new Set([...torn.current].filter((x) => ids.includes(x)));
+    setTearing(new Set(torn.current));
   }, [id]);
 
   const join = useCallback(
@@ -167,6 +193,12 @@ export default function RoomPage() {
     if (phase === "ready" && expiresAt && now >= expiresAt) setPhase("gone");
   }, [now, expiresAt, phase]);
 
+  // The room ending while you watch sounds like what it looks like: torn paper.
+  useEffect(() => {
+    if (prevPhase.current === "ready" && phase === "gone") sound.tearLong();
+    prevPhase.current = phase;
+  }, [phase]);
+
   // Expiry warnings. On first sight, thresholds already behind us are marked as seen (we only say
   // something if the room is close to its end); after that each one fires once as time runs out.
   useEffect(() => {
@@ -182,6 +214,7 @@ export default function RoomPage() {
       if (remaining <= w.ms && !warned.current.has(w.ms)) {
         warned.current.add(w.ms);
         const msg = `Esta sala expira em ${w.label}. Baixe o que precisar antes que tudo seja apagado.`;
+        sound.print(0.25);
         if (w.popup) setPopup(msg);
         else setNotice(msg);
       }
@@ -215,8 +248,22 @@ export default function RoomPage() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  // New items feed the tape forward: a smooth scroll, repeated once the print has finished growing.
+  // Opening the room just lands at the end.
   useEffect(() => {
-    if (followEnd.current) window.scrollTo({ top: document.documentElement.scrollHeight });
+    if (!followEnd.current || phase !== "ready") return;
+    const toEnd = (behavior: ScrollBehavior) => {
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior });
+    };
+    const opening = !opened.current;
+    opened.current = true;
+    if (opening || reducedMotion()) {
+      toEnd("auto");
+      return;
+    }
+    toEnd("smooth");
+    const t = setTimeout(() => toEnd("smooth"), 460);
+    return () => clearTimeout(t);
   }, [items.length, uploads.length, phase]);
 
   async function send() {
@@ -254,8 +301,10 @@ export default function RoomPage() {
           const blob = await blobUpload(`t2u/${id}/${uid()}-${safeName(file.name)}`, file, {
             access: "private",
             handleUploadUrl: `/api/rooms/${id}/upload`,
-            onUploadProgress: (e) =>
-              setUploads((u) => u.map((x) => (x.key === key ? { ...x, pct: Math.round(e.percentage) } : x))),
+            onUploadProgress: (e) => {
+              sound.tick();
+              setUploads((u) => u.map((x) => (x.key === key ? { ...x, pct: Math.round(e.percentage) } : x)));
+            },
           });
           const done = await fetch(`/api/rooms/${id}/files`, {
             method: "POST",
@@ -297,6 +346,7 @@ export default function RoomPage() {
     const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
     const onEnter = (e: DragEvent) => {
       if (!hasFiles(e)) return;
+      if (depth === 0) sound.rustle();
       depth++;
       setDragging(true);
     };
@@ -337,30 +387,46 @@ export default function RoomPage() {
     }
   }
 
-  async function removeMessage(m: Message) {
-    const res = await fetch(`/api/rooms/${id}/messages/${m.id}`, { method: "DELETE" });
-    if (!res.ok) setError(await apiError(res, "Não foi possível apagar"));
+  // Tears right away, without waiting for the server; if the server refuses, the item comes back.
+  async function tearOff(itemId: string, url: string) {
+    torn.current.add(itemId);
+    setTearing(new Set(torn.current));
+    sound.tear();
+    const [res] = await Promise.all([fetch(url, { method: "DELETE" }), sleep(reducedMotion() ? 0 : TEAR_MS)]);
+    if (!res.ok) {
+      setError(await apiError(res, "Não foi possível apagar"));
+      torn.current.delete(itemId);
+      setTearing(new Set(torn.current));
+    }
     await load(true);
   }
 
+  const removeMessage = (m: Message) => tearOff(m.id, `/api/rooms/${id}/messages/${m.id}`);
+
   async function removeFile(f: FileItem) {
     if (!confirm(`Apagar "${f.name}" para todos?`)) return;
-    const res = await fetch(`/api/rooms/${id}/files/${f.id}`, { method: "DELETE" });
-    if (!res.ok) setError(await apiError(res, "Não foi possível apagar"));
-    await load(true);
+    await tearOff(f.id, `/api/rooms/${id}/files/${f.id}`);
   }
 
   async function destroy() {
     if (!confirm("Apagar esta sala e todos os arquivos agora, para todos?")) return;
-    const res = await fetch(`/api/rooms/${id}`, { method: "DELETE" });
-    if (!res.ok) return setError(await apiError(res, "Não foi possível apagar a sala"));
+    setDestroying(true);
+    sound.tearLong();
+    const [res] = await Promise.all([
+      fetch(`/api/rooms/${id}`, { method: "DELETE" }),
+      sleep(reducedMotion() ? 0 : DROP_MS),
+    ]);
+    if (!res.ok) {
+      setDestroying(false);
+      return setError(await apiError(res, "Não foi possível apagar a sala"));
+    }
     router.push("/");
   }
 
   if (phase === "loading") {
     return (
       <main className="stage">
-        <Tape><p style={{ paddingBottom: 12 }}>Abrindo a sala…</p></Tape>
+        <Tape still><p style={{ paddingBottom: 12 }}>Abrindo a sala…</p></Tape>
       </main>
     );
   }
@@ -444,14 +510,18 @@ export default function RoomPage() {
   const shareActs = (
     <div className="share-acts">
       {roomCode && (
-        <button className="act act-solid" onClick={() => copy(roomCode, "code")}>
+        <button className={`act act-solid${copied === "code" ? " stamped" : ""}`} onClick={() => copy(roomCode, "code")}>
           {copied === "code" ? "código copiado" : "copiar código"}
         </button>
       )}
-      <button className={`act${roomCode ? "" : " act-solid act-wide"}`} onClick={() => copy(link, "link")}>
+      <button
+        className={`act${roomCode ? "" : " act-solid act-wide"}${copied === "link" ? " stamped" : ""}`}
+        onClick={() => copy(link, "link")}
+      >
         {copied === "link" ? "link copiado" : "copiar link"}
       </button>
-      {isOwner && <button className="act act-wide" onClick={destroy}>apagar sala</button>}
+      {isOwner && <button className="act" onClick={destroy}>apagar sala</button>}
+      <SoundToggle className={isOwner ? "" : "act-wide"} />
     </div>
   );
   const qr = (size: number) =>
@@ -462,9 +532,9 @@ export default function RoomPage() {
     );
 
   return (
-    <main className="stage stage-room">
+    <main className={`stage stage-room${destroying ? " destroying" : ""}`}>
       {/* Wide screens only: a second strip beside the chat, lined up with it top and bottom. */}
-      <aside className="side">
+      <aside className="side feed">
         <div className="slot" aria-hidden="true" />
         <div className="stub">
           <Wordmark />
@@ -518,14 +588,22 @@ export default function RoomPage() {
           )}
 
           {items.map((it) => (
-            <li className={`item${fresh.has(it.id) ? " fresh" : ""}`} key={it.id}>
+            <li
+              className={`item-wrap${fresh.has(it.id) ? " fresh" : ""}${tearing.has(it.id) ? " tearing" : ""}`}
+              key={it.id}
+            >
+              <div className="item">
               <div className="item-head">
                 <span>
                   {fmtTime(it.at)} <span className={`who${it.mine ? " mine" : ""}`}>{it.by}{it.mine ? " (você)" : ""}</span>
                 </span>
                 <span className="acts">
                   {it.kind === "msg" ? (
-                    <button className="act" onClick={() => copy(it.text, `m${it.id}`)} aria-label={`Copiar mensagem de ${it.by}`}>
+                    <button
+                      className={`act${copied === `m${it.id}` ? " stamped" : ""}`}
+                      onClick={() => copy(it.text, `m${it.id}`)}
+                      aria-label={`Copiar mensagem de ${it.by}`}
+                    >
                       {copied === `m${it.id}` ? "copiado" : "copiar"}
                     </button>
                   ) : (
@@ -567,18 +645,31 @@ export default function RoomPage() {
                   )}
                 </>
               )}
+              </div>
             </li>
           ))}
 
           {uploads.map((u) => (
-            <li className="item" key={u.key}>
-              <div className="item-head">
-                <span>imprimindo…</span>
-                <span>{u.pct}%</span>
+            <li className="item-wrap" key={u.key}>
+              <div className="item">
+                <div className="item-head">
+                  <span>imprimindo…</span>
+                  <span>{u.pct}%</span>
+                </div>
+                <div className="leader"><span className="name">{u.name}</span></div>
+                <progress max={100} value={u.pct} aria-label={`Enviando ${u.name}`} />
+                {u.preview && (
+                  <span className="photo">
+                    {/* The picture comes out of the printer as the upload advances. */}
+                    <img
+                      className="upload-print"
+                      src={u.preview}
+                      alt=""
+                      style={{ clipPath: `inset(0 0 ${100 - u.pct}% 0)` }}
+                    />
+                  </span>
+                )}
               </div>
-              <div className="leader"><span className="name">{u.name}</span></div>
-              <progress max={100} value={u.pct} aria-label={`Enviando ${u.name}`} />
-              {u.preview && <span className="photo"><img src={u.preview} alt="" /></span>}
             </li>
           ))}
         </ul>

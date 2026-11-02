@@ -1,9 +1,21 @@
 import Link from "next/link";
 
-/** The paper strip every screen is printed on. `torn` drops the printer slot: a piece ripped off. */
-export function Tape({ children, torn = false }: { children: React.ReactNode; torn?: boolean }) {
+/**
+ * The paper strip every screen is printed on. It feeds out of the printer slot when it appears;
+ * `torn` drops the slot and lands instead (a piece ripped off); `still` skips the entrance.
+ */
+export function Tape({
+  children,
+  torn = false,
+  still = false,
+}: {
+  children: React.ReactNode;
+  torn?: boolean;
+  still?: boolean;
+}) {
+  const entrance = still ? "" : torn ? " landing" : " feed";
   return (
-    <div className="tape-wrap">
+    <div className={`tape-wrap${entrance}`}>
       {torn ? <div className="tear tear-top" aria-hidden="true" /> : <div className="slot" aria-hidden="true" />}
       <div className="tape">{children}</div>
       <div className="tear" aria-hidden="true" />

@@ -218,7 +218,7 @@ fieldset legend { margin-top: 0; }
 /* --- printed items --- */
 .items { list-style: none; margin: 0; padding: 0; }
 .item { padding: 12px 0; border-bottom: 2px dashed var(--ink); }
-.item:last-child { border-bottom: 0; }
+.item-wrap:last-child .item { border-bottom: 0; }
 .item-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; align-items: center; font-size: 13px; }
 .who { font-weight: 600; }
 .who.mine { color: var(--field); }
@@ -246,13 +246,6 @@ progress::-moz-progress-bar { background: var(--ink); }
 .empty { padding: 22px 0; color: var(--faded); }
 .total { display: flex; align-items: baseline; gap: 6px; font-weight: 600; padding: 12px 0 10px; border-top: 2px solid var(--ink); }
 .total .dots { flex: 1; border-bottom: 2px dotted var(--ink); transform: translateY(-4px); }
-
-.fresh { animation: print .38s steps(8) both; }
-@keyframes print {
-  from { clip-path: inset(0 0 100% 0); transform: translateY(-10px); }
-  to { clip-path: inset(0 0 -4px 0); transform: none; }
-}
-@media (prefers-reduced-motion: reduce) { .fresh { animation: none; } }
 
 /* --- send bar --- */
 .bar {
@@ -352,6 +345,93 @@ progress::-moz-progress-bar { background: var(--ink); }
 @media (min-width: 1100px) and (max-height: 640px) {
   .stub .qr { display: none; }
   .stub .head-note { flex: 1; border-top: 2px dashed var(--ink); margin: 10px -18px 0; padding: 10px 18px 0; }
+}
+
+/* --- paper in motion --- */
+/* Rollers in the printer bar: the stripes follow the scroll position (--roll, set by PaperFx). */
+.slot, .home::before, .stage-room::before {
+  background-image: linear-gradient(0deg, #333 2px, transparent 2px);
+  background-size: 100% 6px;
+  background-position-y: var(--roll, 0);
+}
+
+/* Pressing a button stamps it down. */
+.btn:active, .act:active { transform: translateY(2px); }
+.stamped { animation: stamp .24s steps(4); }
+@keyframes stamp { from { transform: scale(1.12) rotate(-2deg); } }
+
+/* The tape feeds out of the slot; the wrapper's clip hides it until it has passed the slot. */
+.feed { animation: feed-clip .6s; }
+@keyframes feed-clip { from, to { clip-path: inset(0 -20px -20px -20px); } }
+.feed > .tape, .feed > .tear, .feed > .stub { animation: feed .6s steps(14) backwards; }
+/* Capped at one screen: on a long room, -105% alone would keep the tape off screen for most of it. */
+@keyframes feed { from { transform: translateY(max(-105%, -100dvh)); } }
+.landing { animation: landing .42s steps(7) backwards; }
+@keyframes landing { from { transform: translateY(-28px) rotate(-2deg); opacity: 0; } }
+
+/* A new item prints line by line; its height grows, so the rest of the tape moves with it. */
+.item-wrap { display: grid; grid-template-rows: 1fr; }
+.item-wrap > .item { min-width: 0; min-height: 0; }
+.fresh { animation: print .42s steps(10) both; }
+.fresh > .item { overflow: hidden; }
+@keyframes print { from { grid-template-rows: 0fr; } to { grid-template-rows: 1fr; } }
+
+/* Tearing: the item takes a jagged edge and falls away, then the gap closes. */
+.tearing {
+  position: relative; z-index: 2; pointer-events: none;
+  animation: tear-close .24s .26s ease-in both;
+  filter: drop-shadow(0 0 1px var(--ink)) drop-shadow(0 4px 5px rgb(17 17 17 / .35));
+}
+.tearing > .item {
+  background: var(--paper);
+  border-bottom-color: transparent;
+  padding-left: 4px; padding-right: 4px;
+  clip-path: polygon(
+    0 6px, 5% 0, 10% 6px, 15% 0, 20% 6px, 25% 0, 30% 6px, 35% 0, 40% 6px, 45% 0, 50% 6px,
+    55% 0, 60% 6px, 65% 0, 70% 6px, 75% 0, 80% 6px, 85% 0, 90% 6px, 95% 0, 100% 6px,
+    100% calc(100% - 6px), 95% 100%, 90% calc(100% - 6px), 85% 100%, 80% calc(100% - 6px),
+    75% 100%, 70% calc(100% - 6px), 65% 100%, 60% calc(100% - 6px), 55% 100%, 50% calc(100% - 6px),
+    45% 100%, 40% calc(100% - 6px), 35% 100%, 30% calc(100% - 6px), 25% 100%, 20% calc(100% - 6px),
+    15% 100%, 10% calc(100% - 6px), 5% 100%, 0 calc(100% - 6px)
+  );
+  animation: rip .5s cubic-bezier(.45, 0, .9, .6) both;
+}
+@keyframes tear-close { from { grid-template-rows: 1fr; } to { grid-template-rows: 0fr; } }
+@keyframes rip {
+  0% { transform: none; opacity: 1; }
+  22% { transform: translate(5px, -3px) rotate(-1.2deg); opacity: 1; }
+  100% { transform: translate(46px, 150px) rotate(8deg); opacity: 0; }
+}
+
+/* Deleting the room: both strips drop out of the printer. */
+.destroying { overflow: hidden; max-height: 100dvh; }
+.destroying .tape-wrap, .destroying .stub, .destroying .side > .tear, .destroying .side-time, .destroying .bar {
+  animation: drop-out .62s cubic-bezier(.5, 0, .9, .5) both;
+}
+.destroying .tape-wrap { --tilt: 3deg; }
+.destroying .stub, .destroying .side > .tear, .destroying .side-time { --tilt: -4deg; animation-delay: .07s; }
+@keyframes drop-out {
+  18% { transform: translateY(-6px) rotate(calc(var(--tilt, 0deg) * -.2)); }
+  100% { transform: translateY(105vh) rotate(var(--tilt, 0deg)); }
+}
+
+.slip { animation: slip .3s steps(6) backwards; }
+@keyframes slip { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0); } }
+.dropzone { animation: slip .22s steps(5) backwards; }
+dialog.coupon[open] { animation: coupon .36s steps(8) backwards; }
+@keyframes coupon { from { clip-path: inset(0 0 100% 0); transform: translateY(-16px); } to { clip-path: inset(0); } }
+
+.upload-print { transition: clip-path .12s steps(3); }
+
+.foot-sound { margin-top: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .feed, .feed > .tape, .feed > .tear, .feed > .stub, .landing, .fresh, .stamped, .slip, .dropzone,
+  dialog.coupon[open], .tearing, .tearing > .item,
+  .destroying .tape-wrap, .destroying .stub, .destroying .side > .tear, .destroying .side-time, .destroying .bar {
+    animation: none;
+  }
+  .btn:active, .act:active { transform: none; }
 }
 
 /* --- overlays --- */
